@@ -244,6 +244,7 @@ void RavelandAudioProcessorEditor::drawPanelWithGlow(juce::Graphics& g, juce::Re
 
 void RavelandAudioProcessorEditor::setupToggle(juce::ToggleButton& button)
 {
+    button.setLookAndFeel (&toggleLnf);
     button.setColour(juce::ToggleButton::textColourId, colourGold);
     button.setColour(juce::ToggleButton::tickColourId, colourAccent);
     button.setColour(juce::ToggleButton::tickDisabledColourId, colourGold.withAlpha(0.3f));
@@ -297,7 +298,7 @@ RavelandAudioProcessorEditor::RavelandAudioProcessorEditor(RavelandAudioProcesso
         addAndMakeVisible(osc.enabled);
 
         addAndMakeVisible(osc.voices);
-        osc.voicesLabel.setText("VOICES", juce::dontSendNotification);
+        osc.voicesLabel.setText("UNISON", juce::dontSendNotification);
         osc.voicesLabel.setFont(juce::Font(9.0f, juce::Font::bold));
         osc.voicesLabel.setColour(juce::Label::textColourId, colourTextSecondary);
         osc.voicesLabel.setJustificationType(juce::Justification::centred);
@@ -332,6 +333,40 @@ RavelandAudioProcessorEditor::RavelandAudioProcessorEditor(RavelandAudioProcesso
         setupToggle(layer.enabled);
         layer.enabled.setButtonText("LAYER " + juce::String(i + 1));
         addAndMakeVisible(layer.enabled);
+
+        // LOAD button — opens a directory chooser and calls loadSampleLayer
+        layer.loadButton.setColour(juce::TextButton::buttonColourId, juce::Colour::fromRGB(30, 30, 40));
+        layer.loadButton.setColour(juce::TextButton::textColourOffId, colourAccent);
+        layer.loadButton.setColour(juce::ComboBox::outlineColourId, colourAccent.withAlpha(0.5f));
+        addAndMakeVisible(layer.loadButton);
+        const int layerIdx = i;
+        layer.loadButton.onClick = [this, layerIdx]
+        {
+            auto chooser = std::make_shared<juce::FileChooser>(
+                "Select sample folder for Layer " + juce::String(layerIdx + 1),
+                juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+                "*");
+            chooser->launchAsync(juce::FileBrowserComponent::openMode
+                                     | juce::FileBrowserComponent::canSelectDirectories,
+                [this, layerIdx, chooser](const juce::FileChooser& fc)
+                {
+                    if (fc.getResults().isEmpty()) return;
+                    auto folder = fc.getResult();
+                    processor.loadSampleLayer(layerIdx, folder);
+                    layerControls[layerIdx].folderLabel.setText(
+                        folder.getFileName(), juce::dontSendNotification);
+                });
+        };
+
+        // Folder name display
+        layer.folderLabel.setText(processor.getLayerFolderName(i).isEmpty()
+                                       ? "(no folder)"
+                                       : processor.getLayerFolderName(i),
+                                   juce::dontSendNotification);
+        layer.folderLabel.setFont(juce::Font(9.0f));
+        layer.folderLabel.setColour(juce::Label::textColourId, colourTextSecondary);
+        layer.folderLabel.setJustificationType(juce::Justification::centred);
+        addAndMakeVisible(layer.folderLabel);
 
         addAndMakeVisible(layer.gain);
         layer.gainLabel.setText("GAIN", juce::dontSendNotification);
@@ -469,6 +504,11 @@ RavelandAudioProcessorEditor::RavelandAudioProcessorEditor(RavelandAudioProcesso
     addAndMakeVisible(portamentoLabel);
     portamentoAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(vts, "portamento", portamentoSlider);
 
+    setupToggle(retriggerButton);
+    retriggerButton.setButtonText("Retrig");
+    addAndMakeVisible(retriggerButton);
+    retriggerAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(vts, "retrigger", retriggerButton);
+
     // Waveform display labels
     oscWaveformLabel1.setText("OSCILLATOR WAVEFORM", juce::dontSendNotification);
     oscWaveformLabel1.setFont(juce::Font(8.0f, juce::Font::bold));
@@ -576,48 +616,58 @@ void RavelandAudioProcessorEditor::paint(juce::Graphics& g)
     g.setColour(colourAccent.withAlpha(0.2f));
     g.drawRoundedRectangle(pluginBounds.reduced(1), 19.0f, 0.8f);
 
-    // Modern header with clean design
+    // Header area — no separate background fill, title floats on the main surface
     auto header = pluginBounds.removeFromTop(120.0f);
 
-    // Header background with subtle gradient
-    juce::ColourGradient headerBg(colourSurface.brighter(0.05f), header.getX(), header.getY(),
-                                   colourSurface, header.getX(), header.getBottom(), false);
-    g.setGradientFill(headerBg);
-    g.fillRoundedRectangle(header, 20.0f);
-
-    // Clean separator line
-    g.setColour(colourGold.withAlpha(0.3f));
-    g.fillRect(header.getX() + 20, header.getBottom() - 1, header.getWidth() - 40, 1.0f);
-
-    // Modern logo section (left)
+    // NS Audio logo (left)
     if (nsAudioLogoImage.isValid())
     {
-        auto logoBounds = juce::Rectangle<float>(32, header.getY() + 20, 160, 32);
+        auto logoBounds = juce::Rectangle<float>(header.getX() + 32, header.getY() + 20, 160, 32);
         g.drawImage(nsAudioLogoImage, logoBounds, juce::RectanglePlacement::centred);
     }
 
-    // Clean typography for branding
     g.setColour(colourTextSecondary);
-    g.setFont(juce::Font(12.0f, juce::Font::bold).withExtraKerningFactor(0.1f));
-    g.drawText("NS AUDIO", juce::Rectangle<float>(32, header.getY() + 60, 160, 20),
-                juce::Justification::centredLeft, false);
+    g.setFont(juce::Font(11.0f, juce::Font::bold).withExtraKerningFactor(0.1f));
+    g.drawText("NS AUDIO", juce::Rectangle<float>(header.getX() + 32, header.getY() + 58, 160, 20),
+               juce::Justification::centredLeft, false);
 
-    // Modern title (center)
-    auto titleBounds = juce::Rectangle<float>(header.getCentreX() - 200, header.getY() + 25, 400, 50);
-    g.setColour(colourText);
-    g.setFont(juce::Font(28.0f, juce::Font::bold).withExtraKerningFactor(0.05f));
-    g.drawText("RAVELAND", titleBounds, juce::Justification::centred, false);
+    // RAVELAND title — glow layers then crisp text on top (no background box)
+    const float titleCx = header.getCentreX();
+    const float titleY  = header.getY() + 20.0f;
 
-    // Subtitle with modern styling
-    g.setColour(colourAccent);
-    g.setFont(juce::Font(11.0f).withExtraKerningFactor(0.2f));
-    g.drawText("SYNTHESIZER", juce::Rectangle<float>(header.getCentreX() - 200, header.getY() + 70, 400, 15),
+    // Soft glow: draw the text several times, progressively smaller alpha + offset
+    g.setFont (juce::Font (36.0f, juce::Font::bold).withExtraKerningFactor (0.08f));
+    for (int glowStep = 4; glowStep >= 1; --glowStep)
+    {
+        const float spread = (float) glowStep * 1.5f;
+        g.setColour (colourAccent.withAlpha (0.06f));
+        g.drawText ("RAVELAND",
+                    juce::Rectangle<float> (titleCx - 220 - spread, titleY - spread,
+                                            440 + spread * 2, 52 + spread * 2),
+                    juce::Justification::centred, false);
+    }
+    // Crisp white title
+    g.setColour (colourText);
+    g.drawText ("RAVELAND",
+                juce::Rectangle<float> (titleCx - 220, titleY, 440, 52),
                 juce::Justification::centred, false);
 
-    // Version info (right)
-    g.setColour(colourTextSecondary);
-    g.setFont(juce::Font(10.0f));
-    g.drawText("v1.0", juce::Rectangle<float>(header.getRight() - 120, header.getY() + 30, 100, 15),
+    // Subtitle
+    g.setColour (colourAccent.withAlpha (0.85f));
+    g.setFont (juce::Font (11.0f).withExtraKerningFactor (0.25f));
+    g.drawText ("SYNTHESIZER",
+                juce::Rectangle<float> (titleCx - 200, titleY + 46, 400, 16),
+                juce::Justification::centred, false);
+
+    // Thin separator line between header and content
+    g.setColour (colourGold.withAlpha (0.2f));
+    g.fillRect (header.getX() + 20, header.getBottom() - 1.0f, header.getWidth() - 40.0f, 1.0f);
+
+    // Version (right)
+    g.setColour (colourTextSecondary);
+    g.setFont (juce::Font (10.0f));
+    g.drawText ("v1.0",
+                juce::Rectangle<float> (header.getRight() - 120, header.getY() + 30, 100, 15),
                 juce::Justification::centredRight, false);
 
     // Main three-column layout
@@ -672,74 +722,73 @@ void RavelandAudioProcessorEditor::resized()
     auto bounds = getLocalBounds().toFloat();
     bounds.reduce(24, 24); // Main margin
 
-    // Header section (increased height for better spacing)
-    auto header = bounds.removeFromTop(140.0f);
+    // Reserve footer FIRST so main content doesn't overlap it
+    auto footerBounds = bounds.removeFromBottom(80.0f);
 
-    // Preset combo positioned better
+    // Header
+    auto header = bounds.removeFromTop(120.0f); // matches paint()
+
+    // Preset combo — bottom of header
     presetCombo.setBounds(juce::Rectangle<int>(static_cast<int>(bounds.getX() + bounds.getWidth() * 0.5f - 300),
                                                 static_cast<int>(header.getBottom() - 50),
                                                 600, 40).toNearestInt());
 
-    // Main content area with better proportions
-    auto mainArea = bounds.reduced(16, 16);
-    mainArea.removeFromTop(20); // Space after header
+    // Main content area — what remains between header and footer
+    auto mainArea = bounds.reduced(16, 8);
+    mainArea.removeFromTop(20); // space after header line
 
-    // Three main columns with better proportions
-    auto leftColumn = mainArea.removeFromLeft(mainArea.getWidth() * 0.30f);
+    // Three main columns
+    auto leftColumn   = mainArea.removeFromLeft(mainArea.getWidth() * 0.30f);
     auto centerColumn = mainArea.removeFromLeft(mainArea.getWidth() * 0.40f);
-    auto rightColumn = mainArea;
+    auto rightColumn  = mainArea;
 
-    // Left Column: Audio Layers
-    layoutLayerSection(leftColumn.reduced(8, 8));
+    layoutLayerSection     (leftColumn  .reduced(8, 8));
+    layoutFXSection        (centerColumn.reduced(8, 8));
+    layoutOscillatorSection(rightColumn .reduced(8, 8));
 
-    // Center Column: FX Section
-    layoutFXSection(centerColumn.reduced(8, 8));
-
-    // Right Column: Oscillators
-    layoutOscillatorSection(rightColumn.reduced(8, 8));
-
-    // Footer section
-    layoutFooterSection(bounds);
+    layoutFooterSection(footerBounds);
 }
 
 void RavelandAudioProcessorEditor::layoutLayerSection(juce::Rectangle<float> area)
 {
-    // Section title
-    auto titleArea = area.removeFromTop(30.0f);
-    // Title is drawn in paint()
+    area.removeFromTop(30.0f); // title drawn in paint()
 
-    // Three layer sections with equal spacing
-    const float layerHeight = (area.getHeight() - 20) / 3.0f; // Account for spacing
+    // Equal thirds with small gaps between them
+    const float gap = 6.0f;
+    const float layerHeight = (area.getHeight() - 2.0f * gap) / 3.0f;
 
     for (int i = 0; i < 3; ++i)
     {
-        auto layerArea = area.removeFromTop(layerHeight).reduced(4, 8);
+        auto layerArea = area.removeFromTop(layerHeight).reduced(4, 4);
 
-        // Enable button
-        layerControls[i].enabled.setBounds(layerArea.removeFromTop(28).toNearestInt());
+        // Enable + LOAD row
+        auto topRow = layerArea.removeFromTop(24);
+        layerControls[i].enabled.setBounds(topRow.removeFromLeft(topRow.getWidth() * 0.55f).toNearestInt());
+        layerControls[i].loadButton.setBounds(topRow.reduced(2, 2).toNearestInt());
 
-        // Waveform display
-        auto waveformArea = layerArea.removeFromTop(90).reduced(2, 4);
+        // Folder label
+        layerControls[i].folderLabel.setBounds(layerArea.removeFromTop(12).toNearestInt());
+
+        // Waveform display — kept thin so knobs have room
+        auto waveformArea = layerArea.removeFromTop(32).reduced(2, 2);
         layerWaveforms[i]->setBounds(waveformArea.toNearestInt());
 
-        // Waveform label
-        auto waveformLabelArea = waveformArea.withY(waveformArea.getBottom() - 16).withHeight(14);
+        auto waveformLabelArea = waveformArea.withY(waveformArea.getBottom() - 12).withHeight(12);
         if (i == 0) layerWaveformLabel1.setBounds(waveformLabelArea.toNearestInt());
         else if (i == 1) layerWaveformLabel2.setBounds(waveformLabelArea.toNearestInt());
         else if (i == 2) layerWaveformLabel3.setBounds(waveformLabelArea.toNearestInt());
 
-        // Two knobs with labels
-        auto knobArea = layerArea.reduced(2, 4);
+        // Two knobs — fill all remaining height so they're as large as possible
+        auto knobArea = layerArea.reduced(2, 2);
         auto gainArea = knobArea.removeFromLeft(knobArea.getWidth() * 0.5f).reduced(4, 0);
-        layerControls[i].gain.setBounds(gainArea.withTrimmedTop(20).toNearestInt());
-        layerControls[i].gainLabel.setBounds(gainArea.withHeight(16).toNearestInt());
+        layerControls[i].gain.setBounds(gainArea.withTrimmedTop(16).toNearestInt());
+        layerControls[i].gainLabel.setBounds(gainArea.withHeight(14).toNearestInt());
 
         auto startRandArea = knobArea.reduced(4, 0);
-        layerControls[i].startRand.setBounds(startRandArea.withTrimmedTop(20).toNearestInt());
-        layerControls[i].startRandLabel.setBounds(startRandArea.withHeight(16).toNearestInt());
+        layerControls[i].startRand.setBounds(startRandArea.withTrimmedTop(16).toNearestInt());
+        layerControls[i].startRandLabel.setBounds(startRandArea.withHeight(14).toNearestInt());
 
-        // Space between layers
-        area.removeFromTop(8);
+        if (i < 2) area.removeFromTop(gap);
     }
 }
 
@@ -772,89 +821,96 @@ void RavelandAudioProcessorEditor::layoutFXSection(juce::Rectangle<float> area)
 void RavelandAudioProcessorEditor::layoutFXBlock(juce::Rectangle<float>& area, int blockIndex, float height,
                                                 std::array<FancyKnob*, 3> knobs, std::array<juce::Label*, 3> labels)
 {
-    auto blockArea = area.removeFromTop(height).reduced(4, 8);
+    auto blockArea = area.removeFromTop(height).reduced(4, 4);
 
-    // Three knobs per row
-    auto knobRow = blockArea.reduced(2, 4);
+    // Three knobs per row — fill the full block height
+    auto knobRow = blockArea.reduced(2, 2);
     const float knobWidth = knobRow.getWidth() / 3.0f;
 
     for (int i = 0; i < 3; ++i)
     {
         auto knobArea = knobRow.removeFromLeft(knobWidth).reduced(2, 0);
-        knobs[i]->setBounds(knobArea.withTrimmedTop(20).toNearestInt());
-        labels[i]->setBounds(knobArea.withHeight(16).toNearestInt());
+        knobs[i]->setBounds(knobArea.withTrimmedTop(16).toNearestInt());
+        labels[i]->setBounds(knobArea.withHeight(14).toNearestInt());
     }
 
-    // Space between blocks
-    area.removeFromTop(8);
+    // Small gap between blocks
+    area.removeFromTop(6);
 }
 
 void RavelandAudioProcessorEditor::layoutOscillatorSection(juce::Rectangle<float> area)
 {
-    // Section title
-    auto titleArea = area.removeFromTop(30.0f);
-    // Title is drawn in paint()
+    area.removeFromTop(30.0f); // title drawn in paint()
 
-    // Three oscillator sections
-    const float oscHeight = (area.getHeight() - 40) / 3.0f; // Account for master section
+    // Reserve master gain at the bottom BEFORE calculating oscillator heights
+    auto masterArea = area.removeFromBottom(64.0f).reduced(8, 4);
+    masterGainSlider.setBounds(masterArea.withTrimmedTop(16).toNearestInt());
+    masterGainLabel.setBounds(masterArea.withHeight(14).toNearestInt());
+
+    // Three oscillators fill the remaining space equally
+    const float gap = 6.0f;
+    const float oscHeight = (area.getHeight() - 2.0f * gap) / 3.0f;
 
     for (int i = 0; i < 3; ++i)
     {
-        auto oscArea = area.removeFromTop(oscHeight).reduced(4, 8);
+        auto oscArea = area.removeFromTop(oscHeight).reduced(4, 4);
 
-        // Enable button
-        oscControls[i].enabled.setBounds(oscArea.removeFromTop(28).toNearestInt());
+        // Enable toggle
+        oscControls[i].enabled.setBounds(oscArea.removeFromTop(22).toNearestInt());
 
-        // Waveform display
-        auto waveformArea = oscArea.removeFromTop(90).reduced(2, 4);
+        // Waveform display — thin strip so knobs get proper room
+        auto waveformArea = oscArea.removeFromTop(30).reduced(2, 2);
         oscWaveforms[i]->setBounds(waveformArea.toNearestInt());
 
-        // Waveform label
-        auto waveformLabelArea = waveformArea.withY(waveformArea.getBottom() - 16).withHeight(14);
+        auto waveformLabelArea = waveformArea.withY(waveformArea.getBottom() - 12).withHeight(12);
         if (i == 0) oscWaveformLabel1.setBounds(waveformLabelArea.toNearestInt());
         else if (i == 1) oscWaveformLabel2.setBounds(waveformLabelArea.toNearestInt());
         else if (i == 2) oscWaveformLabel3.setBounds(waveformLabelArea.toNearestInt());
 
-        // Three knobs with labels
-        auto knobArea = oscArea.reduced(2, 4);
+        // Three knobs — fill all remaining height for maximum size
+        auto knobArea = oscArea.reduced(2, 2);
         const float knobWidth = knobArea.getWidth() / 3.0f;
 
         auto voicesArea = knobArea.removeFromLeft(knobWidth).reduced(2, 0);
-        oscControls[i].voices.setBounds(voicesArea.withTrimmedTop(20).toNearestInt());
-        oscControls[i].voicesLabel.setBounds(voicesArea.withHeight(16).toNearestInt());
+        oscControls[i].voices.setBounds(voicesArea.withTrimmedTop(16).toNearestInt());
+        oscControls[i].voicesLabel.setBounds(voicesArea.withHeight(14).toNearestInt());
 
         auto detuneArea = knobArea.removeFromLeft(knobWidth).reduced(2, 0);
-        oscControls[i].detune.setBounds(detuneArea.withTrimmedTop(20).toNearestInt());
-        oscControls[i].detuneLabel.setBounds(detuneArea.withHeight(16).toNearestInt());
+        oscControls[i].detune.setBounds(detuneArea.withTrimmedTop(16).toNearestInt());
+        oscControls[i].detuneLabel.setBounds(detuneArea.withHeight(14).toNearestInt());
 
         auto levelArea = knobArea.reduced(2, 0);
-        oscControls[i].level.setBounds(levelArea.withTrimmedTop(20).toNearestInt());
-        oscControls[i].levelLabel.setBounds(levelArea.withHeight(16).toNearestInt());
+        oscControls[i].level.setBounds(levelArea.withTrimmedTop(16).toNearestInt());
+        oscControls[i].levelLabel.setBounds(levelArea.withHeight(14).toNearestInt());
 
-        // Space between oscillators
-        area.removeFromTop(8);
+        if (i < 2) area.removeFromTop(gap);
     }
-
-    // Master section at bottom
-    auto masterArea = area.removeFromBottom(100).reduced(8, 8);
-    masterGainSlider.setBounds(masterArea.withTrimmedTop(20).toNearestInt());
-    masterGainLabel.setBounds(masterArea.withHeight(16).toNearestInt());
 }
 
 void RavelandAudioProcessorEditor::layoutFooterSection(juce::Rectangle<float> bounds)
 {
-    auto footer = bounds.removeFromBottom(100.0f).reduced(24, 12);
+    // bounds is already the footer strip (80px) — just reduce margins
+    auto footer = bounds.reduced(24, 12);
 
-    // Performance controls
-    auto controlsArea = footer.reduced(8, 8);
+    // Performance controls — leave 20px at top for "PERFORMANCE CONTROLS" label
+    auto controlsArea = footer.reduced(8, 0);
+    controlsArea.removeFromTop(20); // clear the painted header text
 
-    monoButton.setBounds(controlsArea.removeFromLeft(120).toNearestInt());
-    controlsArea.removeFromLeft(20);
+    // Three toggle buttons — left-aligned
+    monoButton.setBounds(controlsArea.removeFromLeft(90).toNearestInt());
+    controlsArea.removeFromLeft(8);
 
-    legatoButton.setBounds(controlsArea.removeFromLeft(120).toNearestInt());
-    controlsArea.removeFromLeft(40);
+    legatoButton.setBounds(controlsArea.removeFromLeft(90).toNearestInt());
+    controlsArea.removeFromLeft(8);
 
-    auto portamentoArea = controlsArea.removeFromLeft(180);
-    portamentoSlider.setBounds(portamentoArea.withTrimmedTop(20).toNearestInt());
-    portamentoLabel.setBounds(portamentoArea.withHeight(16).toNearestInt());
+    retriggerButton.setBounds(controlsArea.removeFromLeft(90).toNearestInt());
+    controlsArea.removeFromLeft(24);
+
+    // Portamento knob — use a square area equal to remaining height
+    const float knobSz = controlsArea.getHeight();
+    auto portamentoArea = controlsArea.removeFromLeft(knobSz + 40); // label + knob
+    portamentoLabel.setBounds(portamentoArea.withHeight(14).toNearestInt());
+    auto portKnobArea = portamentoArea.withTrimmedTop(14).withWidth(knobSz).withX(
+        portamentoArea.getX() + (portamentoArea.getWidth() - knobSz) * 0.5f);
+    portamentoSlider.setBounds(portKnobArea.toNearestInt());
 }

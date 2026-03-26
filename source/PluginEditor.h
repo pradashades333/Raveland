@@ -6,6 +6,61 @@
 
 class RavelandAudioProcessor;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Unified toggle look-and-feel: teal tick, gold text, consistent pill shape.
+// Applied to every ToggleButton in the plugin.
+// ─────────────────────────────────────────────────────────────────────────────
+class RavelandToggleLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
+                           bool shouldDrawButtonAsHighlighted,
+                           bool shouldDrawButtonAsDown) override
+    {
+        const auto bounds  = button.getLocalBounds().toFloat();
+        const float h      = bounds.getHeight();
+        const float boxSz  = juce::jmin (h * 0.65f, 16.0f);
+        const float boxX   = 4.0f;
+        const float boxY   = (h - boxSz) * 0.5f;
+
+        static const juce::Colour kAccent  = juce::Colour::fromString ("0xff00d4ff");
+        static const juce::Colour kGold    = juce::Colour::fromString ("0xffd4af37");
+        static const juce::Colour kSurface = juce::Colour::fromRGB (22, 22, 28);
+
+        // Box background
+        g.setColour (button.getToggleState() ? kAccent.withAlpha (0.18f) : kSurface);
+        g.fillRoundedRectangle (boxX, boxY, boxSz, boxSz, 3.0f);
+
+        // Box border — teal when on, muted gold when off
+        g.setColour (button.getToggleState()
+                         ? kAccent
+                         : kGold.withAlpha (shouldDrawButtonAsHighlighted ? 0.7f : 0.35f));
+        g.drawRoundedRectangle (boxX, boxY, boxSz, boxSz, 3.0f, 1.5f);
+
+        // Tick (check mark) when toggled on
+        if (button.getToggleState())
+        {
+            g.setColour (kAccent);
+            const float m = boxSz * 0.18f;
+            juce::Path tick;
+            tick.startNewSubPath (boxX + m,           boxY + boxSz * 0.55f);
+            tick.lineTo          (boxX + boxSz * 0.4f, boxY + boxSz - m);
+            tick.lineTo          (boxX + boxSz - m,    boxY + m);
+            g.strokePath (tick, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
+        }
+
+        // Label text
+        g.setColour (button.getToggleState() ? kAccent : kGold.withAlpha (0.85f));
+        g.setFont (juce::Font (juce::jmin (h * 0.55f, 11.0f), juce::Font::bold)
+                       .withExtraKerningFactor (0.04f));
+        g.drawText (button.getButtonText(),
+                    juce::Rectangle<float> (boxX + boxSz + 6.0f, 0.0f,
+                                            bounds.getWidth() - boxX - boxSz - 8.0f, h),
+                    juce::Justification::centredLeft, false);
+    }
+};
+
 class RavelandAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public juce::Timer
 {
@@ -19,6 +74,9 @@ public:
 
 private:
     RavelandAudioProcessor& processor;
+
+    // Shared look-and-feel for all toggle buttons
+    RavelandToggleLookAndFeel toggleLnf;
 
     // Animated glow effect
     float glowPhase = 0.0f;
@@ -59,6 +117,8 @@ private:
     struct LayerControls
     {
         juce::ToggleButton enabled;
+        juce::TextButton   loadButton { "LOAD" };
+        juce::Label        folderLabel;
         FancyKnob gain, startRand;
         juce::Label gainLabel, startRandLabel;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> enabledAttachment;
@@ -94,6 +154,10 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> legatoAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> portamentoAttachment;
+
+    // Retrigger
+    juce::ToggleButton retriggerButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> retriggerAttachment;
 
     void setupToggle(juce::ToggleButton& button);
     void loadLogos();

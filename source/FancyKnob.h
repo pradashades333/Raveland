@@ -2,114 +2,119 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+/**  Clean rotary knob — standard 270° arc, 7:30 → 12:00 → 4:30.
+ *
+ *   Two angle conventions exist and must NOT be mixed:
+ *
+ *   JUCE addArc   θ = 0 → 12 o'clock, increases clockwise.
+ *                 Point: x = cx + r·sin(θ),  y = cy − r·cos(θ)
+ *
+ *   C++ cos/sin   θ = 0 → 3 o'clock, increases clockwise (Y-down screen).
+ *                 Point: x = cx + r·cos(θ),  y = cy + r·sin(θ)
+ *
+ *   Relationship: juce_θ = ptr_θ + π/2
+ *
+ *   Position     JUCE addArc   cos/sin (ptr)
+ *   ----------   -----------   -------------
+ *   7:30 (min)   5π/4          3π/4
+ *   12:00 (mid)  0  (= 2π)     3π/2
+ *   4:30 (max)   11π/4(=3π/4+2π) 9π/4(=π/4+2π)
+ *
+ *   So min-at-7:30, center-at-12, max-at-4:30.
+ *   For a range symmetric around 0 (e.g. ±12) value 0 is at 12 o'clock.
+ *   For a unipolar range (0–1, 0–100) the midpoint lands at 12 o'clock.
+ */
 class FancyKnob : public juce::Slider
 {
 public:
     FancyKnob() : juce::Slider()
     {
-        setSliderStyle(RotaryHorizontalVerticalDrag);
-        setTextBoxStyle(NoTextBox, false, 0, 0);
-        setColour(rotarySliderFillColourId, juce::Colour::fromString("0xff00d4ff"));
-        setColour(rotarySliderOutlineColourId, juce::Colour::fromString("0xffd4af37").withAlpha(0.6f));
+        setSliderStyle (RotaryVerticalDrag);
+        setTextBoxStyle (NoTextBox, false, 0, 0);
+        setPopupDisplayEnabled (true, false, nullptr);
     }
 
-    void paint(juce::Graphics& g) override
+    void paint (juce::Graphics& g) override
     {
-        auto bounds = getLocalBounds().toFloat();
-        const float centreX = bounds.getCentreX();
-        const float centreY = bounds.getCentreY();
-        const float outerRadius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.45f;
-        const float innerRadius = outerRadius * 0.7f;
+        const auto  bounds = getLocalBounds().toFloat().reduced (3.0f);
+        const float cx     = bounds.getCentreX();
+        const float cy     = bounds.getCentreY();
+        const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
 
-        const double time = juce::Time::getMillisecondCounterHiRes() * 0.001;
-        const float pulse = 0.6f + 0.4f * std::sin(time * 3.0f);
+        // ── Arc geometry ────────────────────────────────────────────────────
+        //  270° sweep, 7:30 (min) → clockwise via 9 → 12 → 3 → 4:30 (max)
+        constexpr float kTotal    = juce::MathConstants<float>::pi * 1.5f;    // 270°
 
-        // Outer shadow/glow
-        juce::ColourGradient outerGlow(juce::Colour::fromString("0xffff2fb2").withAlpha(0.3f * pulse), centreX, centreY,
-                                       juce::Colours::transparentBlack, centreX, centreY, true);
-        g.setGradientFill(outerGlow);
-        g.fillEllipse(centreX - outerRadius * 1.4f, centreY - outerRadius * 1.4f, outerRadius * 2.8f, outerRadius * 2.8f);
+        // JUCE addArc angles (0 = 12 o'clock, CW)
+        constexpr float kArcStart = juce::MathConstants<float>::pi * 1.25f;   // 7:30
 
-        // Main knob body - black with subtle gradients
-        juce::ColourGradient bodyGrad(juce::Colour::fromRGB(20, 20, 25), centreX, centreY - innerRadius,
-                                      juce::Colour::fromRGB(10, 10, 15), centreX, centreY + innerRadius, false);
-        g.setGradientFill(bodyGrad);
-        g.fillEllipse(centreX - innerRadius, centreY - innerRadius, innerRadius * 2.0f, innerRadius * 2.0f);
+        // cos/sin pointer angles (0 = 3 o'clock, CW in Y-down screen)
+        constexpr float kPtrStart = juce::MathConstants<float>::pi * 0.75f;   // 7:30
 
-        // Subtle inner highlight for depth
-        juce::ColourGradient highlightGrad(juce::Colour::fromRGB(35, 35, 40).withAlpha(0.6f), centreX - innerRadius * 0.3f, centreY - innerRadius * 0.7f,
-                                          juce::Colour::fromRGB(45, 45, 50).withAlpha(0.3f), centreX + innerRadius * 0.3f, centreY + innerRadius * 0.3f, false);
-        g.setGradientFill(highlightGrad);
-        g.fillEllipse(centreX - innerRadius * 0.8f, centreY - innerRadius * 0.8f, innerRadius * 1.6f, innerRadius * 1.6f);
+        // Normalised value [0 … 1]
+        const double mn = getMinimum(), mx = getMaximum();
+        const float  t  = (mx > mn) ? (float)((getValue() - mn) / (mx - mn)) : 0.0f;
 
-        // Tick marks around the knob
-        g.setColour(juce::Colour::fromString("0xffa79678").withAlpha(0.6f));
-        for (int i = 0; i < 12; ++i)
+        // Current angle in each convention
+        const float arcAngle = kArcStart + t * kTotal;   // for addArc
+        const float ptrAngle = kPtrStart + t * kTotal;   // for cos/sin
+
+        const float arcR = radius * 0.80f;
+
+        // ── Background track ─────────────────────────────────────────────────
+        juce::Path track;
+        track.addArc (cx - arcR, cy - arcR, arcR * 2.0f, arcR * 2.0f,
+                      kArcStart, kArcStart + kTotal, true);
+        g.setColour (juce::Colour::fromRGB (38, 38, 50));
+        g.strokePath (track, juce::PathStrokeType (3.5f,
+                      juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        // ── Value arc (filled portion) — always drawn; zero-length at t=0 ────
         {
-            const float angle = juce::degreesToRadians((float)i * 30.0f);
-            const float tickInner = innerRadius * 0.9f;
-            const float tickOuter = outerRadius * 0.95f;
-            const float x1 = centreX + tickInner * std::cos(angle);
-            const float y1 = centreY + tickInner * std::sin(angle);
-            const float x2 = centreX + tickOuter * std::cos(angle);
-            const float y2 = centreY + tickOuter * std::sin(angle);
-            g.drawLine(x1, y1, x2, y2, (i % 3 == 0) ? 2.0f : 1.0f);
+            juce::Path filled;
+            filled.addArc (cx - arcR, cy - arcR, arcR * 2.0f, arcR * 2.0f,
+                           kArcStart, arcAngle, true);
+
+            // Cyan (top) → neon-green (bottom)
+            juce::ColourGradient grad (juce::Colour::fromString ("0xff00d4ff"), cx, cy - arcR,
+                                       juce::Colour::fromString ("0xff00ff88"), cx, cy + arcR, false);
+            g.setGradientFill (grad);
+            g.strokePath (filled, juce::PathStrokeType (3.5f,
+                          juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
 
-        // Outer ring with subtle gradient
-        juce::ColourGradient ringGrad(juce::Colour::fromString("0xffa79678").withAlpha(0.8f), centreX, centreY - outerRadius,
-                                      juce::Colour::fromString("0xffa79678").withAlpha(0.4f), centreX, centreY + outerRadius, false);
-        g.setGradientFill(ringGrad);
-        g.drawEllipse(centreX - outerRadius, centreY - outerRadius, outerRadius * 2.0f, outerRadius * 2.0f, 3.0f);
+        // ── Knob body ─────────────────────────────────────────────────────────
+        const float knobR = radius * 0.60f;
 
-        // Neon accent ring
-        g.setColour(juce::Colour::fromString("0xffff2fb2").withAlpha(0.7f * pulse));
-        g.drawEllipse(centreX - outerRadius + 1, centreY - outerRadius + 1, outerRadius * 2.0f - 2.0f, outerRadius * 2.0f - 2.0f, 1.5f);
+        // Rim
+        g.setColour (juce::Colour::fromRGB (55, 55, 68));
+        g.fillEllipse (cx - knobR, cy - knobR, knobR * 2.0f, knobR * 2.0f);
 
-        // Value indicator arc
-        const double minVal = getMinimum();
-        const double maxVal = getMaximum();
-        const double range = maxVal - minVal;
-        const float normalizedValue = (range > 0.0) ? (float)((getValue() - minVal) / range) : 0.5f;
+        // Face (top-lit gradient)
+        juce::ColourGradient face (juce::Colour::fromRGB (48, 48, 60), cx, cy - knobR * 0.6f,
+                                   juce::Colour::fromRGB (20, 20, 28), cx, cy + knobR, false);
+        g.setGradientFill (face);
+        g.fillEllipse (cx - knobR + 1.5f, cy - knobR + 1.5f,
+                       knobR * 2.0f - 3.0f, knobR * 2.0f - 3.0f);
 
-        juce::Path valueArc;
-        const float arcStartAngle = juce::MathConstants<float>::pi * 0.75f;
-        const float arcEndAngle = arcStartAngle + normalizedValue * juce::MathConstants<float>::pi * 1.5f;
-        const float arcRadius = outerRadius * 0.85f;
+        // ── Pointer (cos/sin convention: 0 = 3 o'clock, CW in Y-down) ──────
+        const float pInner = knobR * 0.22f;
+        const float pOuter = knobR * 0.82f;
+        const float px1 = cx + pInner * std::cos (ptrAngle);
+        const float py1 = cy + pInner * std::sin (ptrAngle);
+        const float px2 = cx + pOuter * std::cos (ptrAngle);
+        const float py2 = cy + pOuter * std::sin (ptrAngle);
 
-        valueArc.addArc(centreX - arcRadius, centreY - arcRadius, arcRadius * 2.0f, arcRadius * 2.0f,
-                       arcStartAngle, arcEndAngle, true);
+        // Shadow
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.drawLine (px1 + 0.8f, py1 + 0.8f, px2 + 0.8f, py2 + 0.8f, 2.0f);
 
-        juce::ColourGradient arcGrad(juce::Colour::fromString("0xffff2fb2").withAlpha(0.9f * pulse), centreX, centreY,
-                                     juce::Colour::fromString("0xffa79678").withAlpha(0.7f), centreX, centreY, true);
-        g.setGradientFill(arcGrad);
-        g.strokePath(valueArc, juce::PathStrokeType(4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        // Line
+        g.setColour (juce::Colours::white.withAlpha (0.88f));
+        g.drawLine (px1, py1, px2, py2, 2.0f);
 
-        // Main indicator pointer
-        const float indicatorAngle = arcStartAngle + normalizedValue * (arcEndAngle - arcStartAngle);
-        const float indicatorLength = innerRadius * 0.8f;
-        const float indicatorX = centreX + indicatorLength * std::cos(indicatorAngle);
-        const float indicatorY = centreY + indicatorLength * std::sin(indicatorAngle);
-
-        // Indicator shadow
-        g.setColour(juce::Colours::black.withAlpha(0.5f));
-        g.drawLine(centreX + 1, centreY + 1, indicatorX + 1, indicatorY + 1, 3.0f);
-
-        // Main indicator
-        juce::ColourGradient indicatorGrad(juce::Colour::fromString("0xffff2fb2").withAlpha(0.95f), centreX, centreY,
-                                           juce::Colour::fromString("0xffa79678").withAlpha(0.8f), indicatorX, indicatorY, false);
-        g.setGradientFill(indicatorGrad);
-        g.drawLine(centreX, centreY, indicatorX, indicatorY, 3.0f);
-
-        // Center indicator dot
-        g.setColour(juce::Colour::fromString("0xffff2fb2").withAlpha(0.9f));
-        g.fillEllipse(centreX - 4, centreY - 4, 8, 8);
-
-        g.setColour(juce::Colour::fromString("0xffa79678"));
-        g.drawEllipse(centreX - 4, centreY - 4, 8, 8, 1.5f);
-
-        // Subtle center highlight
-        g.setColour(juce::Colours::white.withAlpha(0.3f));
-        g.fillEllipse(centreX - 2, centreY - 3, 4, 4);
+        // Tip dot
+        g.setColour (juce::Colour::fromString ("0xff00d4ff"));
+        g.fillEllipse (px2 - 2.5f, py2 - 2.5f, 5.0f, 5.0f);
     }
 };

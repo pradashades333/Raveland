@@ -1,0 +1,53 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-macos:
+    name: macOS (VST3 + AU)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install CMake
+        run: brew install cmake || true
+
+      - name: Configure
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DJUCE_BUILD_EXAMPLES=OFF \
+            -DJUCE_BUILD_EXTRAS=OFF
+
+      - name: Build VST3 + AU
+        run: cmake --build build --config Release --target Raveland_VST3 Raveland_AU --parallel 4
+
+      - name: Verify outputs
+        run: |
+          echo "=== Build artefacts ==="
+          find build/Raveland_artefacts -maxdepth 4 \( -name "*.vst3" -o -name "*.component" \) -type d -print
+          test -d "build/Raveland_artefacts/Release/VST3/RaveLand.vst3"
+          test -d "build/Raveland_artefacts/Release/AU/RaveLand.component"
+          echo "Both VST3 and AU built successfully."
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaveLand-macOS-VST3
+          path: build/Raveland_artefacts/Release/VST3/RaveLand.vst3
+
+      - name: Upload AU
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaveLand-macOS-AU
+          path: build/Raveland_artefacts/Release/AU/RaveLand.component

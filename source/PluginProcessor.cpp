@@ -66,6 +66,9 @@ namespace
         params.push_back(std::make_unique<juce::AudioParameterFloat>("portamento", "Portamento",
                                                                      juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
 
+        // Oscillator retrigger (phase reset on each note-on)
+        params.push_back(std::make_unique<juce::AudioParameterBool>("retrigger", "Retrigger", false));
+
         return { params.begin(), params.end() };
     }
 }
@@ -74,6 +77,8 @@ RavelandAudioProcessor::RavelandAudioProcessor()
     : AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, "PARAMS", createParameterLayout())
 {
+    for (auto& flag : layerLoading)
+        flag.store(false);
     struct SimpleSound : public juce::SynthesiserSound
     {
         bool appliesToNote (int) override      { return true; }
@@ -93,10 +98,10 @@ RavelandAudioProcessor::RavelandAudioProcessor()
 void RavelandAudioProcessor::createFactoryPresets()
 {
     presetNames.clear();
-    presetNames.add("INIT — Clean Saw Lead");
-    presetNames.add("Rave — Wide SuperSaw Stack");
-    presetNames.add("Trance — Tight JP-ish Pluck");
-    presetNames.add("Hard Dance — Aggressive Stack");
+    presetNames.add("INIT - Clean Saw Lead");
+    presetNames.add("Rave - Wide SuperSaw Stack");
+    presetNames.add("Trance - Tight JP-ish Pluck");
+    presetNames.add("Hard Dance - Aggressive Stack");
 }
 
 int RavelandAudioProcessor::getNumPrograms()
@@ -219,9 +224,17 @@ void RavelandAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
 
     synth.setCurrentPlaybackSampleRate(sampleRate);
 
+    // Build pointer array once — these addresses are stable for the plugin lifetime
+    std::array<SampleLayer*, 3> layerPtrs { &sampleLayers[0], &sampleLayers[1], &sampleLayers[2] };
+
     for (int i = 0; i < synth.getNumVoices(); ++i)
+    {
         if (auto* v = dynamic_cast<RavelandVoice*>(synth.getVoice(i)))
+        {
             v->prepare(spec);
+            v->setSampleLayers(layerPtrs);
+        }
+    }
 
     chorus.prepare(spec);
     delay.prepare(spec);
@@ -255,11 +268,42 @@ void RavelandAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
 
     buffer.clear();
 
-    // Render synth oscillators
-    synth.renderNextBlock(buffer, midi, 0, buffer.getNumSamples());
+    // Push current APVTS parameter values into every voice before rendering.
+    // This is the connection between the UI knobs and the actual oscillator sound.
+    const bool retrigOn = parameters.getRawParameterValue("retrigger")->load() > 0.5f;
 
-    // TODO: Add sample layer rendering here when samples are loaded
-    // For now, sample layers are architecture-ready but not yet rendering
+    for (int i = 0; i < synth.getNumVoices(); ++i)
+    {
+        if (auto* v = dynamic_cast<RavelandVoice*>(synth.getVoice(i)))
+        {
+            v->setRetrigger(retrigOn);
+
+            for (int osc = 0; osc < 3; ++osc)
+            {
+                auto prefix = "osc" + juce::String(osc + 1);
+                v->setOscParameters(
+                    osc,
+                    parameters.getRawParameterValue(prefix + "Enabled")->load() > 0.5f,
+                    (int) parameters.getRawParameterValue(prefix + "Voices")->load(),
+                    parameters.getRawParameterValue(prefix + "Detune")->load(),
+                    parameters.getRawParameterValue(prefix + "Level")->load());
+            }
+
+            for (int l = 0; l < 3; ++l)
+            {
+                auto prefix = "layer" + juce::String(l + 1);
+                const bool enabled = (parameters.getRawParameterValue(prefix + "Enabled")->load() > 0.5f)
+                                     && !layerLoading[l].load();
+                v->setLayerParameters(
+                    l,
+                    enabled,
+                    parameters.getRawParameterValue(prefix + "Gain")->load());
+            }
+        }
+    }
+
+    // Render synth voices (oscillators + sample layers handled inside each voice)
+    synth.renderNextBlock(buffer, midi, 0, buffer.getNumSamples());
 
     // FX
     juce::dsp::AudioBlock<float> block(buffer);
@@ -339,6 +383,29 @@ void RavelandAudioProcessor::setStateInformation(const void* data, int sizeInByt
 {
     if (auto xml = getXmlFromBinary(data, sizeInBytes))
         parameters.replaceState(juce::ValueTree::fromXml(*xml));
+}
+
+void RavelandAudioProcessor::loadSampleLayer (int layerIndex, const juce::File& folder)
+{
+    if (layerIndex < 0 || layerIndex >= 3)
+        return;
+
+    // Signal the audio thread to skip this layer while we load
+    layerLoading[layerIndex].store(true);
+
+    // Load on the calling (message) thread — this can take a moment for large sample sets
+    sampleLayers[layerIndex].loadFromFolder(folder, spec.sampleRate > 0.0 ? spec.sampleRate : 44100.0);
+    layerFolderNames[layerIndex] = folder.getFileName();
+
+    // Re-enable the layer in the audio thread
+    layerLoading[layerIndex].store(false);
+}
+
+juce::String RavelandAudioProcessor::getLayerFolderName (int layerIndex) const
+{
+    if (layerIndex < 0 || layerIndex >= 3)
+        return {};
+    return layerFolderNames[layerIndex];
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

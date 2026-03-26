@@ -31,7 +31,7 @@ juce_add_plugin(Raveland
     COPY_PLUGIN_AFTER_BUILD FALSE
     PLUGIN_MANUFACTURER_CODE NSAu
     PLUGIN_CODE RvLd
-    FORMATS VST3 Standalone
+    FORMATS AU VST3 Standalone
     PRODUCT_NAME "RaveLand")
 
 target_sources(Raveland

@@ -49,6 +49,10 @@ public:
     int getCurrentPresetIndex() const { return currentPresetIndex; }
     juce::StringArray getPresetNames() const;
 
+    // Sample layer loading (call from the message thread)
+    void loadSampleLayer (int layerIndex, const juce::File& folder);
+    juce::String getLayerFolderName (int layerIndex) const;
+
 private:
     juce::AudioProcessorValueTreeState parameters;
 
@@ -62,9 +66,10 @@ private:
 
     // Sample layers (up to 3)
     std::array<SampleLayer, 3> sampleLayers;
-    std::array<bool, 3> layerEnabled { true, true, false };
-    std::array<float, 3> layerGain { 0.8f, 0.7f, 0.6f };
-    std::array<int, 3> layerStartRand { 35, 45, 55 };
+    std::array<juce::String, 3> layerFolderNames;
+    // layerLoading[i] is true while a layer is being loaded on the main thread;
+    // the audio thread skips that layer to avoid data races.
+    std::array<std::atomic<bool>, 3> layerLoading;
 
     int currentPresetIndex = 0;
     juce::StringArray presetNames;
