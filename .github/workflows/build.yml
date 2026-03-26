@@ -2,14 +2,13 @@ name: Build
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+  workflow_dispatch:
 
 jobs:
+  # ── macOS — VST3 + AU + .pkg installer ──────────────────────────────────
   build-macos:
-    name: macOS (VST3 + AU)
-    runs-on: macos-14
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -17,37 +16,166 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install CMake
-        run: brew install cmake || true
-
-      - name: Configure
+      - name: Configure CMake
         run: |
-          cmake -B build -S . \
+          cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
-            -DJUCE_BUILD_EXAMPLES=OFF \
-            -DJUCE_BUILD_EXTRAS=OFF
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15"
 
-      - name: Build VST3 + AU
-        run: cmake --build build --config Release --target Raveland_VST3 Raveland_AU --parallel 4
+      - name: Build VST3
+        run: cmake --build build --config Release --target Raveland_VST3 -j$(sysctl -n hw.ncpu)
+
+      - name: Build AU
+        run: cmake --build build --config Release --target Raveland_AU -j$(sysctl -n hw.ncpu)
 
       - name: Verify outputs
         run: |
           echo "=== Build artefacts ==="
-          find build/Raveland_artefacts -maxdepth 4 \( -name "*.vst3" -o -name "*.component" \) -type d -print
+          find build/Raveland_artefacts -maxdepth 4 \( -name "*.vst3" -o -name "*.component" \) -type d
           test -d "build/Raveland_artefacts/Release/VST3/RaveLand.vst3"
           test -d "build/Raveland_artefacts/Release/AU/RaveLand.component"
-          echo "Both VST3 and AU built successfully."
+          echo "Both VST3 and AU built OK."
 
-      - name: Upload VST3
+      - name: Ad-hoc sign VST3
+        run: |
+          VST3=$(find build -name "*.vst3" -type d | head -1)
+          echo "Signing: $VST3"
+          codesign --force --deep --sign - "$VST3"
+          codesign --verify --deep --strict "$VST3" && echo "VST3 signature OK"
+
+      - name: Ad-hoc sign AU
+        run: |
+          AU=$(find build -name "*.component" -type d | head -1)
+          echo "Signing: $AU"
+          codesign --force --deep --sign - "$AU"
+          codesign --verify --deep --strict "$AU" && echo "AU signature OK"
+
+      - name: Build .pkg installer
+        run: |
+          set -e
+
+          VST3=$(find build -name "*.vst3"      -type d | head -1)
+          AU=$(find   build -name "*.component" -type d | head -1)
+
+          # Stage at their final macOS install paths
+          mkdir -p pkg_stage/vst3/Library/Audio/Plug-Ins/VST3
+          mkdir -p pkg_stage/au/Library/Audio/Plug-Ins/Components
+
+          cp -R "$VST3" "pkg_stage/vst3/Library/Audio/Plug-Ins/VST3/"
+          cp -R "$AU"   "pkg_stage/au/Library/Audio/Plug-Ins/Components/"
+
+          # Build component packages
+          pkgbuild \
+            --root        pkg_stage/vst3 \
+            --identifier  com.nsaudio.raveland.vst3 \
+            --version     1.0.0 \
+            --install-location / \
+            RaveLand-VST3.pkg
+
+          pkgbuild \
+            --root        pkg_stage/au \
+            --identifier  com.nsaudio.raveland.au \
+            --version     1.0.0 \
+            --install-location / \
+            RaveLand-AU.pkg
+
+          # Generate distribution.xml inline
+          cat > distribution.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <installer-gui-script minSpecVersion="1">
+              <title>RaveLand v1.0</title>
+              <welcome file="welcome.html" mime-type="text/html"/>
+              <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+              <domains enable_localSystem="true"/>
+              <choices-outline>
+                  <line choice="com.nsaudio.raveland.vst3"/>
+                  <line choice="com.nsaudio.raveland.au"/>
+              </choices-outline>
+              <choice id="com.nsaudio.raveland.vst3" title="VST3 Plugin">
+                  <pkg-ref id="com.nsaudio.raveland.vst3"/>
+              </choice>
+              <choice id="com.nsaudio.raveland.au" title="AU Plugin">
+                  <pkg-ref id="com.nsaudio.raveland.au"/>
+              </choice>
+              <pkg-ref id="com.nsaudio.raveland.vst3">RaveLand-VST3.pkg</pkg-ref>
+              <pkg-ref id="com.nsaudio.raveland.au">RaveLand-AU.pkg</pkg-ref>
+          </installer-gui-script>
+          XML
+
+          # Create a simple welcome page
+          mkdir -p pkg_resources
+          cat > pkg_resources/welcome.html <<'HTML'
+          <html><body>
+          <h2>RaveLand v1.0</h2>
+          <p>This will install the RaveLand synthesizer plugin (VST3 and AU)
+             into your system plugin folders.</p>
+          </body></html>
+          HTML
+
+          productbuild \
+            --distribution distribution.xml \
+            --resources    pkg_resources \
+            --package-path . \
+            "RaveLand-macOS-Installer.pkg"
+
+          ls -lh RaveLand-macOS-Installer.pkg
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
+        with:
+          name: RaveLand-macOS-Installer
+          path: RaveLand-macOS-Installer.pkg
+
+      - name: Upload VST3 (zip)
+        run: |
+          VST3=$(find build -name "*.vst3" -type d | head -1)
+          cd "$(dirname "$VST3")" && zip -r "$GITHUB_WORKSPACE/RaveLand-macOS-VST3.zip" "$(basename "$VST3")"
+
+      - name: Upload AU (zip)
+        run: |
+          AU=$(find build -name "*.component" -type d | head -1)
+          cd "$(dirname "$AU")" && zip -r "$GITHUB_WORKSPACE/RaveLand-macOS-AU.zip" "$(basename "$AU")"
+
+      - uses: actions/upload-artifact@v4
         with:
           name: RaveLand-macOS-VST3
-          path: build/Raveland_artefacts/Release/VST3/RaveLand.vst3
+          path: RaveLand-macOS-VST3.zip
 
-      - name: Upload AU
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: RaveLand-macOS-AU
-          path: build/Raveland_artefacts/Release/AU/RaveLand.component
+          path: RaveLand-macOS-AU.zip
+
+  # ── Windows — VST3 only ──────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DJUCE_BUILD_EXAMPLES=OFF `
+            -DJUCE_BUILD_EXTRAS=OFF
+
+      - name: Build VST3
+        run: cmake --build build --config Release --target Raveland_VST3 -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Package VST3
+        shell: bash
+        run: |
+          VST3=$(find build -name "*.vst3" -type d | head -1)
+          echo "Found: $VST3"
+          cd "$(dirname "$VST3")"
+          7z a "$GITHUB_WORKSPACE/RaveLand-Windows-VST3.zip" "$(basename "$VST3")"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RaveLand-Windows-VST3
+          path: RaveLand-Windows-VST3.zip
