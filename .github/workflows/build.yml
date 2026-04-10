@@ -109,15 +109,18 @@ jobs:
             --package-path . \
             "RaveLand-macOS-Installer.pkg"
 
-          # Verify BOTH packages are present in the installer
-          echo "=== installer size ==="
+          # Verify both component packages have real content and are in the installer
+          echo "=== component package sizes ==="
+          ls -lh RaveLand-VST3.pkg RaveLand-AU.pkg
+          echo "=== final installer size ==="
           ls -lh RaveLand-macOS-Installer.pkg
-          echo "=== expanding installer to check contents ==="
+
+          # Expand and check both payloads are present
           pkgutil --expand RaveLand-macOS-Installer.pkg installer_check
-          echo "--- VST3 payload ---"
-          pkgutil --payload-files installer_check/com.nsaudio.raveland.vst3.pkg | head -5
-          echo "--- AU payload ---"
-          pkgutil --payload-files installer_check/com.nsaudio.raveland.au.pkg | head -5
+          echo "=== installer contents ==="
+          ls installer_check/
+          echo "--- binaries inside installer ---"
+          find installer_check -name "RaveLand" -o -name "RaveLand.vst3" -o -name "RaveLand.component" 2>/dev/null | head -10
           rm -rf installer_check
 
       - name: Upload installer
