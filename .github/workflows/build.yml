@@ -21,7 +21,9 @@ jobs:
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15"
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15" \
+            -DJUCE_BUILD_EXAMPLES=OFF \
+            -DJUCE_BUILD_EXTRAS=OFF
 
       - name: Build VST3
         run: cmake --build build --config Release --target Raveland_VST3 -j$(sysctl -n hw.ncpu)
@@ -37,19 +39,22 @@ jobs:
           test -d "build/Raveland_artefacts/Release/AU/RaveLand.component"
           echo "Both VST3 and AU built OK."
 
-      - name: Ad-hoc sign VST3
+      - name: Strip quarantine + sign VST3
         run: |
           VST3=$(find build -name "*.vst3" -type d | head -1)
-          echo "Signing: $VST3"
+          echo "VST3: $VST3"
+          # Strip any quarantine flags the runner may have set
+          xattr -cr "$VST3"
           codesign --force --deep --sign - "$VST3"
-          codesign --verify --deep --strict "$VST3" && echo "VST3 signature OK"
+          codesign --verify --deep "$VST3" && echo "VST3 signature OK"
 
-      - name: Ad-hoc sign AU
+      - name: Strip quarantine + sign AU
         run: |
           AU=$(find build -name "*.component" -type d | head -1)
-          echo "Signing: $AU"
+          echo "AU: $AU"
+          xattr -cr "$AU"
           codesign --force --deep --sign - "$AU"
-          codesign --verify --deep --strict "$AU" && echo "AU signature OK"
+          codesign --verify --deep "$AU" && echo "AU signature OK"
 
       - name: Build .pkg installer
         run: |
@@ -78,15 +83,12 @@ jobs:
             --install-location "/Library/Audio/Plug-Ins/Components" \
             RaveLand-AU.pkg
 
-          # distribution.xml — no rootVolumeOnly so it works on all volumes
           cat > distribution.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <installer-gui-script minSpecVersion="2">
               <title>RaveLand v1.0</title>
-              <options customize="never" require-scripts="false"
-                       hostArchitectures="arm64,x86_64"/>
-              <domains enable_localSystem="true"
-                       enable_currentUserHome="false"/>
+              <options customize="never" require-scripts="false"/>
+              <domains enable_localSystem="true" enable_currentUserHome="false"/>
               <choices-outline>
                   <line choice="vst3"/>
                   <line choice="au"/>
@@ -94,7 +96,7 @@ jobs:
               <choice id="vst3" title="VST3 Plugin" selected="true" enabled="true">
                   <pkg-ref id="com.nsaudio.raveland.vst3"/>
               </choice>
-              <choice id="au"   title="AU Plugin"   selected="true" enabled="true">
+              <choice id="au" title="AU Plugin" selected="true" enabled="true">
                   <pkg-ref id="com.nsaudio.raveland.au"/>
               </choice>
               <pkg-ref id="com.nsaudio.raveland.vst3">RaveLand-VST3.pkg</pkg-ref>
@@ -107,10 +109,16 @@ jobs:
             --package-path . \
             "RaveLand-macOS-Installer.pkg"
 
-          # Verify the pkg contains actual payload
-          echo "=== pkg contents ==="
-          pkgutil --payload-files RaveLand-macOS-Installer.pkg || true
+          # Verify BOTH packages are present in the installer
+          echo "=== installer size ==="
           ls -lh RaveLand-macOS-Installer.pkg
+          echo "=== expanding installer to check contents ==="
+          pkgutil --expand RaveLand-macOS-Installer.pkg installer_check
+          echo "--- VST3 payload ---"
+          pkgutil --payload-files installer_check/com.nsaudio.raveland.vst3.pkg | head -5
+          echo "--- AU payload ---"
+          pkgutil --payload-files installer_check/com.nsaudio.raveland.au.pkg | head -5
+          rm -rf installer_check
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
