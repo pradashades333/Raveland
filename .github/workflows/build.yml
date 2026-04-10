@@ -57,68 +57,59 @@ jobs:
 
           VST3=$(find build -name "*.vst3"      -type d | head -1)
           AU=$(find   build -name "*.component" -type d | head -1)
+          echo "VST3: $VST3"
+          echo "AU:   $AU"
 
-          # Stage at their final macOS install paths
-          mkdir -p pkg_stage/vst3/Library/Audio/Plug-Ins/VST3
-          mkdir -p pkg_stage/au/Library/Audio/Plug-Ins/Components
-
-          cp -R "$VST3" "pkg_stage/vst3/Library/Audio/Plug-Ins/VST3/"
-          cp -R "$AU"   "pkg_stage/au/Library/Audio/Plug-Ins/Components/"
-
-          # Build component packages
+          # --component tells pkgbuild to analyse the bundle properly and
+          # --install-location is the exact directory the bundle lands in.
+          # This is the correct approach for plugin bundles; --root staging
+          # does not handle bundle metadata reliably.
           pkgbuild \
-            --root        pkg_stage/vst3 \
-            --identifier  com.nsaudio.raveland.vst3 \
-            --version     1.0.0 \
-            --install-location / \
+            --component      "$VST3" \
+            --identifier     com.nsaudio.raveland.vst3 \
+            --version        1.0.0 \
+            --install-location "/Library/Audio/Plug-Ins/VST3" \
             RaveLand-VST3.pkg
 
           pkgbuild \
-            --root        pkg_stage/au \
-            --identifier  com.nsaudio.raveland.au \
-            --version     1.0.0 \
-            --install-location / \
+            --component      "$AU" \
+            --identifier     com.nsaudio.raveland.au \
+            --version        1.0.0 \
+            --install-location "/Library/Audio/Plug-Ins/Components" \
             RaveLand-AU.pkg
 
-          # Generate distribution.xml inline
-          cat > distribution.xml <<'XML'
+          # distribution.xml — no rootVolumeOnly so it works on all volumes
+          cat > distribution.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <installer-gui-script minSpecVersion="1">
+          <installer-gui-script minSpecVersion="2">
               <title>RaveLand v1.0</title>
-              <welcome file="welcome.html" mime-type="text/html"/>
-              <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
-              <domains enable_localSystem="true"/>
+              <options customize="never" require-scripts="false"
+                       hostArchitectures="arm64,x86_64"/>
+              <domains enable_localSystem="true"
+                       enable_currentUserHome="false"/>
               <choices-outline>
-                  <line choice="com.nsaudio.raveland.vst3"/>
-                  <line choice="com.nsaudio.raveland.au"/>
+                  <line choice="vst3"/>
+                  <line choice="au"/>
               </choices-outline>
-              <choice id="com.nsaudio.raveland.vst3" title="VST3 Plugin">
+              <choice id="vst3" title="VST3 Plugin" selected="true" enabled="true">
                   <pkg-ref id="com.nsaudio.raveland.vst3"/>
               </choice>
-              <choice id="com.nsaudio.raveland.au" title="AU Plugin">
+              <choice id="au"   title="AU Plugin"   selected="true" enabled="true">
                   <pkg-ref id="com.nsaudio.raveland.au"/>
               </choice>
               <pkg-ref id="com.nsaudio.raveland.vst3">RaveLand-VST3.pkg</pkg-ref>
               <pkg-ref id="com.nsaudio.raveland.au">RaveLand-AU.pkg</pkg-ref>
           </installer-gui-script>
-          XML
-
-          # Create a simple welcome page
-          mkdir -p pkg_resources
-          cat > pkg_resources/welcome.html <<'HTML'
-          <html><body>
-          <h2>RaveLand v1.0</h2>
-          <p>This will install the RaveLand synthesizer plugin (VST3 and AU)
-             into your system plugin folders.</p>
-          </body></html>
-          HTML
+          EOF
 
           productbuild \
             --distribution distribution.xml \
-            --resources    pkg_resources \
             --package-path . \
             "RaveLand-macOS-Installer.pkg"
 
+          # Verify the pkg contains actual payload
+          echo "=== pkg contents ==="
+          pkgutil --payload-files RaveLand-macOS-Installer.pkg || true
           ls -lh RaveLand-macOS-Installer.pkg
 
       - name: Upload installer
